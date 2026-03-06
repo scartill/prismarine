@@ -1,3 +1,7 @@
+# 1.5.3
+
+- Fixed repository links
+
 # 1.5.2
 
 - Fixed generated model naming bug

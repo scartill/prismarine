@@ -9,7 +9,7 @@ Key features include:
 
 Prismarine aims to streamline the development process by reducing boilerplate code and ensuring that database interactions are type-safe and maintainable.
 
-Prismarine works best with [EasySAM](https://github.com/adsight-app/easysam).
+Prismarine works best with [EasySAM](https://github.com/scartill/easysam).
 
 ## Installation
 
@@ -181,7 +181,7 @@ For example, if the `Cluster` has a prefix `TapgameExample`, by default the `Tea
 
 #### DynamoDB Stream Triggers
 
-When using Prismarine with [EasySAM](https://github.com/adsight-app/easysam), you can configure DynamoDB stream triggers directly on your models using the `trigger` parameter. This allows a Lambda function to be automatically invoked whenever items in the table are inserted, modified, or removed.
+When using Prismarine with [EasySAM](https://github.com/scartill/easysam), you can configure DynamoDB stream triggers directly on your models using the `trigger` parameter. This allows a Lambda function to be automatically invoked whenever items in the table are inserted, modified, or removed.
 
 **Simple trigger (string format):**
 
@@ -233,7 +233,7 @@ The trigger Lambda function will receive DynamoDB stream events with information
 
 #### DynamoDB Time To Live (TTL)
 
-When using Prismarine with [EasySAM](https://github.com/adsight-app/easysam), you can configure DynamoDB Time To Live (TTL) directly on your models using the `ttl` parameter. This allows DynamoDB to automatically delete items after a specified expiration time.
+When using Prismarine with [EasySAM](https://github.com/scartill/easysam), you can configure DynamoDB Time To Live (TTL) directly on your models using the `ttl` parameter. This allows DynamoDB to automatically delete items after a specified expiration time.
 
 **Example:**
 
