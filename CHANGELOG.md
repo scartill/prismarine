@@ -1,3 +1,10 @@
+# 1.5.4
+
+- Pin click dependency to 8.1.8
+- Added project documentation for Gemini CLI
+- Added CODEOWNERS file
+- Added GitHub Action for automated PyPI publishing
+
 # 1.5.3
 
 - Fixed repository links
