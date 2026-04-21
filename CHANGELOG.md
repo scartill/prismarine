@@ -1,3 +1,7 @@
+# 1.5.5
+
+- Added `Any` and `Dict` to generated model imports
+
 # 1.5.4
 
 - Pin click dependency to 8.1.8
