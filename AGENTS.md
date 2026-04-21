@@ -59,3 +59,23 @@ uv sync --extra pydantic
 ### Testing
 - New features or changes to the generation logic should be verified in `tests/test_prisma_client_generation.py`.
 - Tests typically involve mocking the file system or using temporary directories to verify the content of generated Python files.
+
+<!-- hippo:start -->
+## Project Memory (Hippo)
+
+At the start of every task, run:
+```bash
+hippo context --auto --budget 1500
+```
+Read the output before writing any code.
+
+On errors or unexpected behaviour:
+```bash
+hippo remember "<description of what went wrong>" --error
+```
+
+On task completion:
+```bash
+hippo outcome --good
+```
+<!-- hippo:end -->
