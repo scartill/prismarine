@@ -19,7 +19,7 @@ def prismarine(ctx, path, verbose):
     set_path(paths)
 
 
-@prismarine.command(name='generate-client', help='Generate a Prismarine client сщву for a given cluster package')
+@prismarine.command(name='generate-client', help='Generate a Prismarine client for a given cluster package')
 @click.option(
     '--base',
     required=True,
