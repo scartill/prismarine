@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 import logging as lg
 from importlib.metadata import version
@@ -7,7 +8,6 @@ from typing import Literal
 from mako.template import Template
 from caseconverter import snakecase, pascalcase
 import inspect
-import gray_formatter
 
 from prismarine.prisma_common import get_cluster
 
@@ -251,8 +251,26 @@ def build_client(
             header += f'from {i[0]} import {i[1]}\n'
 
     content = header + DYNAMO_ACCESS + module_body
-    content = gray_formatter.fix_content(content)
-    return content
+    try:
+        result = subprocess.run(
+            ['ruff', 'format', '--stdin-filename', 'prismarine_client.py', '-'],
+            input=content,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            cwd=r_base_dir,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            'ruff is not installed or not on PATH. '
+            'Install it via "pip install ruff".'
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f'ruff format failed:\n{exc.stderr}'
+        ) from exc
+    return result.stdout
 
 
 def write_client(content, base_dir: Path, cluster_package: str):
