@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 import logging as lg
 from importlib.metadata import version
@@ -7,7 +8,6 @@ from typing import Literal
 from mako.template import Template
 from caseconverter import snakecase, pascalcase
 import inspect
-import gray_formatter
 
 from prismarine.prisma_common import get_cluster
 
@@ -251,8 +251,14 @@ def build_client(
             header += f'from {i[0]} import {i[1]}\n'
 
     content = header + DYNAMO_ACCESS + module_body
-    content = gray_formatter.fix_content(content)
-    return content
+    result = subprocess.run(
+        ['ruff', 'format', '--stdin-filename', 'prismarine_client.py', '-'],
+        input=content,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
 
 
 def write_client(content, base_dir: Path, cluster_package: str):
