@@ -1,3 +1,10 @@
+# 1.6.0
+
+- Replaced `gray-formatter` with `ruff` for generated client formatting
+- Moved `ruff` to runtime dependencies
+- Improved reliability of client generation with better error handling and locale-safety
+- Fixed typo in `generate-client` command help text
+
 # 1.5.5
 
 - Added `Any` and `Dict` to generated model imports
