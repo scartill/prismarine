@@ -251,13 +251,25 @@ def build_client(
             header += f'from {i[0]} import {i[1]}\n'
 
     content = header + DYNAMO_ACCESS + module_body
-    result = subprocess.run(
-        ['ruff', 'format', '--stdin-filename', 'prismarine_client.py', '-'],
-        input=content,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ['ruff', 'format', '--stdin-filename', 'prismarine_client.py', '-'],
+            input=content,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            cwd=r_base_dir,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            'ruff is not installed or not on PATH. '
+            'Install it via "pip install ruff".'
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f'ruff format failed:\n{exc.stderr}'
+        ) from exc
     return result.stdout
 
 
