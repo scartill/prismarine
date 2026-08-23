@@ -2,6 +2,7 @@ from decimal import Decimal
 from typing import Any, Literal, TypeVar
 import uuid
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 from prismarine.runtime.dynamo_access import DynamoAccess
 
@@ -88,7 +89,12 @@ def _put_item(
     item: Any,
     **kwargs
 ):
-    dynamo.get_table(table).put_item(Item=serialize_item(item), **kwargs)  # type: ignore
+    try:
+        dynamo.get_table(table).put_item(Item=serialize_item(item), **kwargs)  # type: ignore
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            raise DbConditionFailed(str(e)) from e
+        raise
 
 
 SaveItem = TypeVar('SaveItem', bound=Any)
@@ -193,4 +199,8 @@ class DbException(Exception):
 
 
 class DbNotFound(DbException):
+    pass
+
+
+class DbConditionFailed(DbException):
     pass
