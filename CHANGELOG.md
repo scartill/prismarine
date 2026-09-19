@@ -1,3 +1,8 @@
+# 1.6.1
+
+- Added `DbConditionFailed` exception, raised when a DynamoDB conditional check fails on `put`
+- Exported `DbConditionFailed` from `prismarine.runtime`
+
 # 1.6.0
 
 - Replaced `gray-formatter` with `ruff` for generated client formatting
