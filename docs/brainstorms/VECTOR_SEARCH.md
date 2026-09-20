@@ -1,7 +1,25 @@
 # Technical Brainstorm: DynamoDB Native Vector Search Support
 
-> Status: **Phase 2 — awaiting user clarifications.** Approaches and recommendation
-> (Phases 3–4) will be filled in after the `USER_INPUT` placeholders below are answered.
+> Status: **Phase 4 complete.** User clarifications parsed (Q1–Q6). Approaches, SWOT,
+> recommendation, risks, and a phased execution plan are below.
+
+## Decisions Locked from Clarifications
+
+| Q | Decision |
+|---|----------|
+| Q1 | Dedicated `@c.vector_index(...)` decorator, stacked above `@c.model` like GSIs. |
+| Q2 | Generated `search(...)` returns a `SearchResults` type (item + score); named kwargs generated from the SearchSchema; embedding **not** stripped. |
+| Q3 | Emit a `vectorindices` block into the EasySAM dict as if supported; EasySAM CFN support coordinated separately. |
+| Q4 | **Option A** — add `get_client()` to the `DynamoAccess` ABC and `DefaultDynamoAccess`. |
+| Q5 | Vectors as `numpy.ndarray`, gated behind an optional `prismarine[vectors]` extra; core stays numpy-free. |
+| Q6 | Backfill/readiness is **out of library scope** — documented only, no retry/wait helper. |
+
+> **Discrepancy note (Q4 × Q5):** `search_vectors` needs a plain `[{"N": str(x)}]` payload
+> (no `L` wrapper) and numpy arrays are not Decimal/JSON-native. The vector formatter must
+> live behind the optional-extra boundary (guarded `import numpy`) so the *core* runtime
+> and the default `typed-dict`/`pydantic` code paths never hard-depend on numpy. The
+> generated client must import the vector helper lazily/optionally. This is the main
+> design tension and is addressed in every approach below.
 
 ## Problem Statement & Scope
 
@@ -192,12 +210,159 @@
 
 ## Architectural Approaches Evaluated
 
-_Pending — filled in Phase 3 after clarifications._
+All approaches share the same locked decisions (dedicated decorator, `SearchResults`
+return, named kwargs, `get_client()`, numpy-optional, no readiness helper). They differ
+in **how the numpy-optional boundary and the generated search code are structured** —
+the one real remaining degree of freedom.
+
+Shared building blocks (common to A/B/C):
+- **`cluster.py`:** `@c.vector_index(index, attribute, dimensions, distance='COSINE',
+  hash=None, filters=[], projection='ALL')` → records
+  `model['vector_indexes'][index] = {...}`. Requires the model decorator below it
+  (same guard as `@c.index`). Validates `distance ∈ {COSINE,EUCLIDEAN,DOT_PRODUCT}`,
+  `1 ≤ dimensions ≤ 4096`, `len(model['vector_indexes']) ≤ 5`.
+- **`dynamo_access.py` / `dynamo_default.py`:** add `get_client()` to the ABC;
+  default implementation returns `self.get_resource().meta.client` so existing custom
+  `DynamoAccess` subclasses keep working without edits (they inherit the default).
+- **`SearchResults`:** a runtime type exported from `prismarine.runtime`. A generic
+  container: `SearchResult(item: Model, score: float)` + `SearchResults` as
+  `list[SearchResult]` (or a small wrapper with `.items()`/iteration). Generated per
+  model so `item` is typed to the concrete model.
+- **`prisma_easysam.py`:** emit `result[short_name]['vectorindices']` from
+  `model['vector_indexes']` (attribute, dimensions, distancefunction, searchschema).
+- **Docs/tests:** README section, `example/` model with a vector index, generation test
+  asserting the emitted method + a `vectorindices` easysam assertion.
+
+### Approach A: Runtime-Isolated Vector Module (numpy behind a single seam)
+
+- **Concept:** All numpy/vector-formatting logic lives in **one new runtime module**
+  `runtime/dynamo_vectors.py` with `_search_vectors(dynamo, table, index, *, vector,
+  top_k, condition=None, expr_values=None, projection=None) -> SearchResults`. numpy is
+  imported **lazily inside that module** (guarded: accept `numpy.ndarray` *or* any
+  sequence, call `.tolist()` when present, else `list(...)`, then format to
+  `[{"N": repr(float(x))}]`). The generated client imports `_search_vectors` only when a
+  model actually declares a vector index. Core CRUD (`dynamo_crud.py`) is untouched.
+- **Component Changes:** `cluster.py` (+decorator), `dynamo_access.py`/`dynamo_default.py`
+  (+`get_client`), **new** `runtime/dynamo_vectors.py`, `runtime/__init__.py`
+  (export `SearchResult`/`SearchResults`), `model.mako` (+search block, nested class per
+  vector index), `prisma_client.py` (conditional `_search_vectors` import + render vector
+  indexes), `prisma_easysam.py` (+`vectorindices`), `pyproject.toml`
+  (`[project.optional-dependencies] vectors = ["numpy>=..."]`).
+- **Dependencies Introduced:** `numpy` (optional extra only).
+
+### Approach B: Inline in `dynamo_crud.py` with runtime numpy guard
+
+- **Concept:** Add `_search_vectors` directly into the existing `dynamo_crud.py`
+  alongside the other `_`-helpers, with an inline `try: import numpy` guard at call time.
+  Fewer files; consistent with "all helpers in one module." Downside: mixes an
+  optional-dependency code path into the core CRUD module that every generated client
+  imports, so the numpy seam is less contained and easier to accidentally harden into a
+  real dependency.
+- **Component Changes:** Same as A but *without* the new module — logic folded into
+  `dynamo_crud.py`.
+- **Dependencies Introduced:** `numpy` (optional extra), but the guard sits in the core
+  module.
+
+### Approach C: Vector formatting in generated client + thin runtime call
+
+- **Concept:** Push vector→`[{"N":...}]` formatting into the **generated client code**
+  (emitted by the template), leaving the runtime helper a thin `client.search_vectors`
+  passthrough. Maximizes "explicit generated code" visibility. Downside: numpy handling
+  and float formatting get duplicated into every generated client and are hard to fix
+  centrally after generation; conflicts with keeping generated files
+  regeneration-only and thin.
+- **Component Changes:** Heavier `model.mako`; minimal runtime helper; same decorator/
+  access/easysam changes.
+- **Dependencies Introduced:** `numpy` (optional extra), referenced from generated code.
 
 ## Structured Comparison & Methodology
 
-_Pending — filled in Phase 3._
+### SWOT Matrix
+
+| Approach | Strengths | Weaknesses | Opportunities | Threats/Risks |
+|---|---|---|---|---|
+| **A: Isolated module** | Single, contained numpy seam; core CRUD untouched; easy to test in isolation; lazy import means non-vector clients never touch numpy | One more file; slight indirection | Clean home for future vector features (batch search, wait-helpers if scope changes) | Minimal — mainly getting the lazy-import guard right |
+| **B: Inline in crud** | Fewest files; all helpers co-located | Optional-dep path lives in the module every client imports; higher risk of numpy hardening into a hard dep; harder to keep core numpy-free | — | Accidental `import numpy` at module top breaks core installs without the extra |
+| **C: Formatting in template** | Very explicit generated code | Logic duplicated across generated clients; central fixes require regen; fattens template; numpy leaks into generated import graph | — | Divergent generated clients; regressions hard to patch post-generation |
+
+### Methodology notes
+- Weighted by Prismarine's existing conventions: **thin generated files**, **runtime
+  helpers do the work**, **optional features stay optional** (mirrors how `pydantic`
+  support is gated). Approach A aligns with all three; B weakens the optional boundary;
+  C weakens the thin-generated-file principle.
 
 ## Recommendation
 
-_Pending — filled in Phase 4._
+**Adopt Approach A — the runtime-isolated vector module.**
+
+Rationale:
+- **Keeps the numpy boundary in exactly one place.** The Q5 requirement (numpy behind
+  `prismarine[vectors]`) is only safe if numpy is never imported at the top of a module
+  that the core/every client loads. A dedicated `runtime/dynamo_vectors.py` with a lazy,
+  duck-typed import (`.tolist()` when available, else `list(...)`) is the cleanest
+  enforcement and matches the established pattern used for the optional pydantic path.
+- **Preserves the thin-generated-client principle.** The generated client only imports
+  and calls `_search_vectors`; all formatting/score logic stays centrally patchable
+  (rejects C).
+- **Doesn't contaminate core CRUD.** Every generated client imports `dynamo_crud`;
+  folding an optional-dep path there (B) invites accidental hard-dependency regressions.
+- **Testable:** the module can be unit-tested with a fake client and both a numpy array
+  and a plain list, proving the optional boundary works with and without numpy installed.
+
+The `get_client()` addition (Q4/Option A) with a `resource.meta.client` default keeps
+the `DynamoAccess` contract backward-compatible for `example/myapp-custom-access`-style
+subclasses. `SearchResults` (Q2) is generated per-model for typed `item` access.
+
+### Key Risks & Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| numpy accidentally becomes a hard dependency | Confine all numpy references to `runtime/dynamo_vectors.py` behind a lazy import; add a test that imports the core + a non-vector generated client with numpy uninstalled (or simulated absent) |
+| `search_vectors` unavailable in the pinned boto3 (needs Aug-2026 service model) | Bump/verify the minimum boto3 in `pyproject.toml`; surface a clear error if `get_client()` lacks `search_vectors` |
+| EasySAM can't yet consume `vectorindices` | Per Q3, emit the block regardless and document "requires EasySAM ≥ X"; coordinate the EasySAM change separately; keep the key name agreed with EasySAM maintainers |
+| Score-direction confusion (COSINE/EUCLIDEAN lower-is-better vs DOT_PRODUCT higher) | Return the raw `Score` in `SearchResults` and document semantics per distance function; do not silently re-sort or invert |
+| `SearchConditionExpression` requires HASH value when SearchSchema defines one | Generate the HASH kwarg as **required** (non-defaulted) when a schema HASH exists; inline filters as optional kwargs; equality-only for HASH |
+| Decimal round-trip cost / precision on stored 1536-dim vectors | Out of scope for search path (search uses plain-N formatting); document f32 precision note; leave stored-attribute serialization unchanged |
+| Backfilling / newly-ACTIVE `ValidationException` | Out of scope per Q6 — document the caveat and that callers must retry |
+
+### Summary Table
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Declaration | `@c.vector_index(...)` decorator | Q1; mirrors `@c.index` stacking |
+| Return type | Per-model `SearchResults` (item + score) | Q2; typed, keeps score |
+| Filter args | Named kwargs from SearchSchema (HASH required, filters optional) | Q2; matches named-arg philosophy |
+| Client access | `get_client()` on ABC + default via `resource.meta.client` | Q4/Option A; backward compatible |
+| Vectors | `numpy.ndarray` (duck-typed), optional `prismarine[vectors]` | Q5; core stays numpy-free |
+| Code placement | Isolated `runtime/dynamo_vectors.py` (Approach A) | Contains numpy seam; thin generated client; core untouched |
+| Infra | Emit `vectorindices` into EasySAM dict | Q3; coordinate EasySAM separately |
+| Readiness | Document only | Q6; out of scope |
+
+## Phased Execution Plan
+
+1. **Decorator + model data (`cluster.py`)** — add `@c.vector_index`, validation, and
+   `model['vector_indexes']`. Unit-test the decorator records/validates correctly.
+2. **Runtime access (`dynamo_access.py`, `dynamo_default.py`)** — add `get_client()` to
+   the ABC with a `resource.meta.client` default; confirm custom-access example still
+   satisfies the interface.
+3. **Vector runtime module (`runtime/dynamo_vectors.py`)** — `_search_vectors(...)` +
+   `SearchResult`/`SearchResults`; lazy numpy import; format vector to `[{"N": ...}]`;
+   build `SearchConditionExpression`/`ExpressionAttributeValues` from kwargs; map
+   response `SearchResults` → typed results. Export types from `runtime/__init__.py`.
+4. **Generation (`model.mako`, `prisma_client.py`)** — render a nested class per vector
+   index with `search(*, vector, top_k=10, <hash> [required], <filter>=None,
+   projection=None)`; conditionally import `_search_vectors`/`SearchResults`; support both
+   `typed-dict` and `pydantic` model libraries.
+5. **EasySAM emission (`prisma_easysam.py`)** — emit `vectorindices` from
+   `model['vector_indexes']`.
+6. **Packaging (`pyproject.toml`)** — add `vectors = ["numpy>=..."]` optional extra;
+   verify/raise minimum boto3 for `search_vectors`.
+7. **Tests** — extend `tests/test_prisma_client_generation.py` for the emitted search
+   method and `vectorindices`; add a runtime test for `_search_vectors` with a fake
+   client using both a numpy array and a plain list; add a "numpy-absent" import test.
+8. **Docs + example** — README `vector_index` section (declaration, search usage, score
+   semantics, backfill caveat, `pip install prismarine[vectors]`); add a vector model to
+   `example/`.
+
+Ready to convert this into a seed (`Seed`) or a full spec (`Save Spec` / `Split Tasks`)
+on request.
