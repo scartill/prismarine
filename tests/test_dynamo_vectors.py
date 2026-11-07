@@ -29,9 +29,21 @@ class ClientWithoutSearch:
     """A client that does not support search_vectors."""
 
 
+class _FakeTable:
+    """Minimal stand-in for a boto3 Table: exposes the physical .name."""
+
+    def __init__(self, name):
+        self.name = name
+
+
 class FakeDynamoAccess:
     def __init__(self, client):
         self._client = client
+
+    def get_table(self, full_model_name: str):
+        # Echo the logical name as the physical name for test purposes. (Real
+        # access modules append an env suffix; _search_vectors reads .name.)
+        return _FakeTable(full_model_name)
 
     def get_client(self):
         return self._client
@@ -328,6 +340,26 @@ def test_capability_check_accepts_simplenamespace_with_search():
     results = _search_vectors(dynamo, 'Products', 'by-embedding', vector=[0.1, 0.2], top_k=5)
     assert len(results) == 2
     assert recorded['TableName'] == 'Products'
+
+
+def test_search_vectors_uses_physical_table_name_from_get_table():
+    # _search_vectors must resolve the PHYSICAL table name via get_table(...).name
+    # (like CRUD), not pass the logical model name straight through. Otherwise it
+    # queries a non-existent table and mismatches the index ARN in IAM policies.
+    payload = _canned_payload()
+    recorded = {}
+
+    def search_vectors(**request):
+        recorded.update(request)
+        return payload
+
+    class StageSuffixAccess(FakeDynamoAccess):
+        def get_table(self, full_model_name: str):
+            return _FakeTable(f'{full_model_name}-prod')
+
+    dynamo = StageSuffixAccess(SimpleNamespace(search_vectors=search_vectors))
+    _search_vectors(dynamo, 'Products', 'by-embedding', vector=[0.1, 0.2], top_k=5)
+    assert recorded['TableName'] == 'Products-prod'
 
 
 # --- numpy-absent import guard ----------------------------------------------

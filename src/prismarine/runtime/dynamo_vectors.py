@@ -92,6 +92,15 @@ def _search_vectors(
     if not 1 <= top_k <= 100:
         raise ValueError(f'top_k must be in [1, 100]; got {top_k}')
 
+    # Resolve the PHYSICAL table name the same way CRUD does. `table` is the
+    # logical model name (e.g. "ReacherProduct"); get_table() maps it to the
+    # deployed table (e.g. "ReacherProduct-dev") via the access module. CRUD
+    # calls dynamo.get_table(table).put_item(...); the low-level SearchVectors
+    # call needs that physical name as a string, so read .name. Using the logical
+    # name directly queries a non-existent table (and mismatches the index ARN in
+    # IAM policies scoped to the real table name).
+    physical_table = dynamo.get_table(table).name
+
     search_vector = _format_vector(vector, dimensions=dimensions)
 
     serializer = TypeSerializer()
@@ -142,7 +151,7 @@ def _search_vectors(
         projection_expression = ', '.join(proj_aliases)
 
     request: dict[str, Any] = {
-        'TableName': table,
+        'TableName': physical_table,
         'IndexName': index,
         'SearchVector': search_vector,
         'TopK': top_k,
