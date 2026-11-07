@@ -1,3 +1,11 @@
+---
+generated-by: "Plan Spec"
+source: docs/seed/vector-search.md
+generated-at: 2026-10-31T10:40:00+02:00
+status: split
+critiqued-revision: 0f625db
+---
+
 # Spec: DynamoDB Native Vector Search Support
 
 _Derived from `docs/seed/vector-search.md`. Design decisions confirmed with the user
