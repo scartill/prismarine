@@ -36,7 +36,16 @@ def _resolve_annotation(cls, attr: str, use_pydantic: bool) -> str:
     if ann is None:
         return 'str'
 
-    return ann if isinstance(ann, str) else getattr(ann, '__name__', str(ann))
+    if isinstance(ann, str):
+        return ann
+
+    # inspect.formatannotation renders generics correctly (e.g. Optional[str] ->
+    # 'Optional[str]', int -> 'int'), unlike `__name__` which collapses
+    # Optional[str] to the bare, unimported 'Optional' and breaks the client.
+    try:
+        return inspect.formatannotation(ann)
+    except Exception:
+        return getattr(ann, '__name__', None) or str(ann)
 
 
 def _build_vector_indexes(model, use_pydantic: bool) -> list[dict]:

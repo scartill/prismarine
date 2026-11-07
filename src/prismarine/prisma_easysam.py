@@ -53,7 +53,7 @@ def build_dynamo_tables(prefix, cluster):
         # deferred to the EasySAM CloudFormation side (spec "Out of Scope") unless/until a
         # billing field is introduced on the model. We emit the block without raising.
         vector_indices = []
-        for name, vindex in data.get('vector_indexes', {}).items():
+        for name, vindex in sorted(data.get('vector_indexes', {}).items(), key=lambda x: x[0]):
             sam_vector_index = {
                 'name': name,
                 'attribute': vindex['attribute'],

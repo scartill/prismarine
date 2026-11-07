@@ -1,4 +1,5 @@
 from typing import TypedDict, NotRequired, Literal
+import keyword
 
 from caseconverter import snakecase
 
@@ -107,6 +108,7 @@ class Cluster:
             'results',
             'hash_conditions',
             'filter_conditions',
+            'dynamo',
         }
 
         attrs = []
@@ -121,6 +123,11 @@ class Cluster:
                 raise ValueError(
                     f"Attribute '{attr}' collides with a reserved name "
                     f"('{normalized}') used by the generated search method"
+                )
+            if keyword.iskeyword(normalized):
+                raise ValueError(
+                    f"Attribute '{attr}' normalizes to the Python keyword '{normalized}', "
+                    f'which is not a valid parameter name in the generated search method'
                 )
             if normalized in seen:
                 raise ValueError(

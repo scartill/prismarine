@@ -212,8 +212,9 @@ def test_caller_expression_names_values_merge_without_collision():
     # caller value serialized via TypeSerializer
     assert values[':min_rank'] == {'N': '5'}
 
-    # escape-hatch expression appended to the namespaced auto part
-    assert req['SearchConditionExpression'] == '(#pv_k_0 = :pv_v_0) AND #user_rank > :min_rank'
+    # escape-hatch expression appended to the namespaced auto part, parenthesized
+    # so a caller OR cannot escape the hash constraint (code review HIGH-2)
+    assert req['SearchConditionExpression'] == '(#pv_k_0 = :pv_v_0) AND (#user_rank > :min_rank)'
 
 
 def test_projection_aliasing():
@@ -337,3 +338,70 @@ def test_module_does_not_import_numpy():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+# --- code-review HIGH/MEDIUM fixes ------------------------------------------
+
+
+def test_float_filter_values_are_serialized_not_crashed():
+    # Native Python floats must be coerced to Decimal before TypeSerializer,
+    # which otherwise raises TypeError. (Code review HIGH-1)
+    client = FakeClient(_canned_payload())
+    dynamo = FakeDynamoAccess(client)
+
+    _search_vectors(
+        dynamo,
+        'Products',
+        'by-embedding',
+        vector=[0.1, 0.2],
+        top_k=5,
+        filter_conditions={'Price': 9.5},
+    )
+
+    assert client.request['ExpressionAttributeValues'][':pv_v_0'] == {'N': '9.5'}
+
+
+def test_condition_expression_is_parenthesized():
+    # A caller OR expression must be grouped so it cannot escape the hash constraint.
+    # (Code review HIGH-2)
+    client = FakeClient(_canned_payload())
+    dynamo = FakeDynamoAccess(client)
+
+    _search_vectors(
+        dynamo,
+        'Products',
+        'by-embedding',
+        vector=[0.1, 0.2],
+        top_k=5,
+        hash_conditions={'Category': 'books'},
+        condition_expression='#s = :s1 OR #s = :s2',
+        expression_names={'#s': 'Status'},
+        expression_values={':s1': 'a', ':s2': 'b'},
+    )
+
+    cond = client.request['SearchConditionExpression']
+    assert cond == '(#pv_k_0 = :pv_v_0) AND (#s = :s1 OR #s = :s2)'
+
+
+def test_caller_expression_names_cannot_hijack_reserved_namespace():
+    # (Code review MEDIUM) caller keys colliding with #pv_/:pv_ are rejected.
+    dynamo = FakeDynamoAccess(FakeClient(_canned_payload()))
+    with pytest.raises(ValueError):
+        _search_vectors(
+            dynamo,
+            'Products',
+            'by-embedding',
+            vector=[0.1, 0.2],
+            top_k=5,
+            hash_conditions={'Category': 'books'},
+            expression_names={'#pv_k_0': 'Hijacked'},
+        )
+    with pytest.raises(ValueError):
+        _search_vectors(
+            dynamo,
+            'Products',
+            'by-embedding',
+            vector=[0.1, 0.2],
+            top_k=5,
+            expression_values={':pv_v_0': 'x'},
+        )

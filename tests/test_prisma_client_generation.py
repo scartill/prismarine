@@ -314,3 +314,48 @@ class PlainItem(TypedDict):
     assert 'SearchResults' not in content
     assert 'VectorSearchResult' not in content
     assert 'class ByEmbedding' not in content
+
+
+_VEC_DECORATOR_OPTIONAL_FILTER = (
+    "@cluster.vector_index(index='by-embedding', attribute='Embedding', "
+    "dimensions=8, distance='COSINE', hash='Category', filters=['Brand'])"
+)
+
+
+def test_build_client_renders_optional_filter_annotation(tmp_path, monkeypatch):
+    # A filter field annotated with typing.Optional must render as a usable,
+    # importable type hint (not the bare, unimported 'Optional'). (Code review HIGH-3)
+    body = f"""
+from typing import TypedDict, Optional
+from prismarine.runtime import Cluster
+
+cluster = Cluster('UnitTest')
+
+
+{_VEC_DECORATOR_OPTIONAL_FILTER}
+@cluster.model(PK='ProductId')
+class Product(TypedDict):
+    ProductId: str
+    Category: str
+    Brand: Optional[str]
+    Embedding: list[float] | None
+"""
+    base_dir, cluster_package = _write_models(tmp_path, body)
+    _stub_version(monkeypatch)
+    cluster = get_cluster(base_dir, cluster_package)
+
+    content = build_client(
+        cluster,
+        Path(base_dir),
+        runtime=None,
+        access_module=None,
+        extra_imports=[],
+        model_library='typed-dict',
+    )
+
+    # The bare, unimported 'Optional' as a standalone annotation must NOT appear
+    # (it would raise NameError on import). A valid rendering like
+    # 'Optional[str]' or 'str | None' is acceptable.
+    assert 'brand: Optional | None' not in content
+    # Generated client compiles cleanly.
+    compile(content, '<gen>', 'exec')

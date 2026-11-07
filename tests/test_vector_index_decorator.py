@@ -188,3 +188,32 @@ def test_vector_index_without_model_raises():
         @c.vector_index(index='by-embedding', attribute='Embedding', dimensions=8, distance='COSINE')
         class Product:
             pass
+
+
+def test_filter_named_dynamo_is_rejected():
+    # 'dynamo' is the module-level client handle in the generated client;
+    # a filter named Dynamo would shadow it. (Code review MEDIUM)
+    import pytest
+
+    c = Cluster()
+    with pytest.raises(ValueError):
+
+        @c.vector_index(
+            index='by-embedding', attribute='Embedding', dimensions=8, distance='COSINE', filters=['Dynamo']
+        )
+        @c.model(PK='PK')
+        class Product:
+            pass
+
+
+def test_python_keyword_attribute_is_rejected():
+    # A hash/filter normalizing to a Python keyword would emit invalid syntax. (Code review MEDIUM)
+    import pytest
+
+    c = Cluster()
+    with pytest.raises(ValueError):
+
+        @c.vector_index(index='by-embedding', attribute='Embedding', dimensions=8, distance='COSINE', hash='class')
+        @c.model(PK='PK')
+        class Product:
+            pass

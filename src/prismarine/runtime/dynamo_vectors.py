@@ -5,7 +5,7 @@ from typing import Any, Generic, TypeVar
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 from prismarine.runtime.dynamo_access import DynamoAccess
-from prismarine.runtime.dynamo_crud import prepare_item
+from prismarine.runtime.dynamo_crud import prepare_item, serialize_item
 
 T = TypeVar('T')
 
@@ -101,22 +101,31 @@ def _search_vectors(
         name_ph = f'#pv_k_{i}'
         value_ph = f':pv_v_{i}'
         names[name_ph] = attr
-        values[value_ph] = serializer.serialize(value)
+        # serialize_item coerces native floats -> Decimal(str(val)); TypeSerializer
+        # rejects raw Python floats, and Prismarine standardizes on native floats.
+        values[value_ph] = serializer.serialize(serialize_item(value))
         conjunctions.append(f'{name_ph} = {value_ph}')
 
     search_condition = ' AND '.join(conjunctions) if conjunctions else None
 
     if condition_expression:
         if search_condition:
-            search_condition = f'({search_condition}) AND {condition_expression}'
+            # Parenthesize the caller expression: in DynamoDB condition expressions
+            # AND binds tighter than OR, so an un-grouped `OR` in condition_expression
+            # would otherwise escape the partition/hash constraint.
+            search_condition = f'({search_condition}) AND ({condition_expression})'
         else:
             search_condition = condition_expression
 
     for name, attr in (expression_names or {}).items():
+        if name.startswith('#pv_'):
+            raise ValueError(f'expression_names key {name!r} collides with the reserved #pv_ namespace')
         names[name] = attr
 
     for key, value in (expression_values or {}).items():
-        values[key] = serializer.serialize(value)
+        if key.startswith(':pv_'):
+            raise ValueError(f'expression_values key {key!r} collides with the reserved :pv_ namespace')
+        values[key] = serializer.serialize(serialize_item(value))
 
     projection_expression = None
     if projection:
