@@ -153,3 +153,54 @@ class ${ModelClass}(Model):
             % endif
         % endif
     % endfor
+    % for vindex in VectorIndexes:
+    class ${pascal(vindex['name'])}:
+        @staticmethod
+        def search(
+            *,
+            vector,
+            % if vindex['hash']:
+            ${snake(vindex['hash'])}: ${vindex['hash_type']},
+            % endif
+            top_k: int = 10,
+            % for f in vindex['filters']:
+            ${snake(f['attr'])}: ${f['type']} | None = None,
+            % endfor
+            condition_expression: str | None = None,
+            expression_values: dict | None = None,
+            expression_names: dict | None = None,
+            projection: list[str] | None = None,
+            return_consumed_capacity: str | None = None,
+        ) -> SearchResults[${Model}]:
+            % if vindex['hash']:
+            _pv_hash_conditions = {'${vindex['hash']}': ${snake(vindex['hash'])}}
+            % else:
+            _pv_hash_conditions = {}
+            % endif
+            _pv_filter_conditions = {
+            % for f in vindex['filters']:
+                '${f['attr']}': ${snake(f['attr'])},
+            % endfor
+            }
+            _pv_filter_conditions = {k: v for k, v in _pv_filter_conditions.items() if v is not None}
+            _pv_results = _search_vectors(
+                dynamo,
+                ${ModelClass}.table_name,
+                '${vindex['name']}',
+                vector=vector,
+                top_k=top_k,
+                dimensions=${vindex['dimensions']},
+                hash_conditions=_pv_hash_conditions,
+                filter_conditions=_pv_filter_conditions,
+                condition_expression=condition_expression,
+                expression_values=expression_values,
+                expression_names=expression_names,
+                projection=projection,
+                return_consumed_capacity=return_consumed_capacity,
+            )
+            % if UsePydantic:
+            return SearchResults(hits=[VectorSearchResult(item=_load_model(${Model}, _pv_hit.item), score=_pv_hit.score) for _pv_hit in _pv_results.hits], consumed_capacity=_pv_results.consumed_capacity)
+            % else:
+            return _pv_results
+            % endif
+    % endfor

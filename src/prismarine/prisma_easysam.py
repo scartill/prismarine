@@ -1,5 +1,5 @@
 def build_dynamo_tables(prefix, cluster):
-    'Returns: (Full Table Name with Prefix, EasySAM Table Definition)'
+    "Returns: (Full Table Name with Prefix, EasySAM Table Definition)"
 
     result = {}
 
@@ -41,6 +41,34 @@ def build_dynamo_tables(prefix, cluster):
             sam_index['attributes'] = index_attributes
             indices.append(sam_index)
 
+        # Build vector index metadata. Note (Critique E5): vector attribute/hash/filters are
+        # deliberately NOT registered into the `attributes` (AttributeDefinitions) map below —
+        # CloudFormation only permits attributes that serve as table or GSI/LSI key schema there,
+        # so arbitrary filter attributes would break deployment. All vector metadata stays
+        # confined to the `vectorindices` block.
+        #
+        # Billing mode (Open Question Q1): vector indexes require the table to be on-demand
+        # (PAY_PER_REQUEST). The current model dict carries no billing-mode field (see
+        # runtime/cluster.py), so there is nothing to assert against here; enforcement is
+        # deferred to the EasySAM CloudFormation side (spec "Out of Scope") unless/until a
+        # billing field is introduced on the model. We emit the block without raising.
+        vector_indices = []
+        for name, vindex in sorted(data.get('vector_indexes', {}).items(), key=lambda x: x[0]):
+            sam_vector_index = {
+                'name': name,
+                'attribute': vindex['attribute'],
+                'dimensions': vindex['dimensions'],
+                'distance': vindex['distance'],
+            }
+
+            if vindex['hash']:
+                sam_vector_index['hash'] = vindex['hash']
+
+            if vindex['filters']:
+                sam_vector_index['filters'] = vindex['filters']
+
+            vector_indices.append(sam_vector_index)
+
         def named_dict_to_item(name, data):
             result = {'name': name}
             result.update(data)
@@ -52,6 +80,9 @@ def build_dynamo_tables(prefix, cluster):
 
         if indices:
             result[short_name]['indices'] = indices
+
+        if vector_indices:
+            result[short_name]['vectorindices'] = vector_indices
 
         # Add trigger if present in model
         if 'trigger' in data:
