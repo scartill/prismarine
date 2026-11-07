@@ -3,6 +3,10 @@
 - **Source spec**: `docs/specs/vector-search.md`
 - **Task directory**: `docs/tasks/vector-search/`
 - **Status**: `ready`
+- **Task-level critique applied**: `docs/critiques/vector-search-tasks.md` — 4 🎯 Must-Address
+  auto-applied (X1 hashless, E1 import path, P1 pydantic collection, E3 local shadowing); plus
+  low-cost 💡 folded in (E4 empty expr maps, E5 ≤5 ceiling, E6 `uv run python`, E7 annotation
+  stringify, E8 parallelism). 🤔 Q1 (billing-mode enforcement) remains open below.
 
 ## Execution Order
 1. `task-01-vector-index-decorator.md` — foundational metadata/decorator; other tasks read
@@ -40,10 +44,10 @@
 ## Coverage Map
 | Spec requirement / acceptance criterion | Risk or testing-strategy item | Task(s) | Verification evidence |
 |---|---|---|---|
-| `@c.vector_index` decorator + metadata | P1 (snakecase reserved check), E4 (dims bound) | 01 | `test_vector_index_decorator.py`: registration dict, invalid distance/dims raise, PascalCase collision raises |
+| `@c.vector_index` decorator + metadata | P1 (snakecase reserved check), E4 (dims bound), P2-tasks (no dup/hash-collision names), E3-tasks (internal-local names reserved), E5-tasks (≤5 ceiling) | 01 | `test_vector_index_decorator.py`: registration dict, invalid distance/dims raise, PascalCase + duplicate + internal-local collisions raise, 6th index raises, hashless registers |
 | `get_client()` on `DynamoAccess` (Decision 4-a) | custom-access inheritance | 02 | `test_dynamo_access_get_client.py`: inherited client via `.meta.client` |
-| `_search_vectors`, two-tier results | E1 (TypeSerializer), E2 (pre-flight + collection), E3 (namespaced), E4 (top_k), X1 (no NextToken), X2 (names/projection) | 03 | `test_dynamo_vectors.py`: request-shape + deserialization + bounds + guards |
-| Generated nested `search()` class | P2 (ordering + type hints), X1, X2, E1-pass2 (dimensions), E3 (pydantic hydration), byte-identical non-vector | 04 | `test_prisma_client_generation.py`: substring asserts + byte-identical guard, both libraries |
+| `_search_vectors`, two-tier results | E1 (TypeSerializer), E2 (pre-flight + collection), E3 (namespaced), E4 (top_k), X1 (no NextToken; hashless `hash_conditions=None`), X2 (names/projection), E4-tasks (omit empty expr maps) | 03 | `test_dynamo_vectors.py`: request-shape + deserialization + bounds + hashless + empty-map guards |
+| Generated nested `search()` class | P2 (ordering + type hints), X1 (hashless), X2, E1-pass2 (dimensions), E3-pass2 (pydantic hydration), E1-tasks (import from `dynamo_vectors`), P1-tasks (return `SearchResults`), E3-tasks (`_pv_*` locals), E7-tasks (annotation stringify), byte-identical non-vector | 04 | `test_prisma_client_generation.py`: substring + compile asserts, hashless case, both libraries, byte-identical guard |
 | `vectorindices` EasySAM block (Decision 6-a) | E5 (no AttributeDefinitions pollution, on-demand) | 05 | `test_easysam_vectorindices.py`: block shape, attrs key-only, no-key-for-non-vector |
 | `[vectors]` extra + version floors; core numpy-free | E6 (types-boto3 floor), numpy-absent guard | 06 | full `pytest`, numpy-absent subprocess check, install + byte-identical diff |
 | README section, example model, custom-access docs | docs caveats (no pagination, Optional vector fields, retry) | 07 | regenerated example client renders; README section present |
@@ -66,7 +70,8 @@
 After Tasks 1-5, run the full gate (Task 6):
 1. `uv run pytest -q` — entire suite green (pre-existing + new).
 2. `ruff format --check .` and `ruff check src tests` — clean.
-3. Numpy-absent guard: `python -c "import prismarine, sys; assert 'numpy' not in sys.modules"`.
+3. Numpy-absent guard: `uv run python -c "import prismarine, sys; assert 'numpy' not in sys.modules"`
+   (use `uv run python`, not bare `python`, in uv-managed envs — pass-2-tasks E6).
 4. Regenerate `example/myapp` (non-vector) client and `git diff` — **no** change
    (byte-identical invariant).
 5. Regenerate the new `example/` vector model (Task 7) client and confirm `ByEmbedding.search`

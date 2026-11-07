@@ -51,8 +51,10 @@ and run the full test suite + ruff to confirm green and byte-identical non-vecto
 - **Automated tests**:
   - Add/confirm a numpy-absent guard test: after importing the core package (not
     `dynamo_vectors` behaviour that duck-types numpy), assert `'numpy' not in sys.modules`.
-    Prefer a subprocess check (`python -c "import prismarine; import sys;
-    assert 'numpy' not in sys.modules"`) to avoid pollution from other tests that import numpy.
+    Prefer a subprocess check — **invoke via `uv run python`** (not bare `python`, which may
+    not be on `PATH` in a uv-managed env; Critique E6, pass-2-tasks):
+    `uv run python -c "import prismarine, sys; assert 'numpy' not in sys.modules"` — to avoid
+    pollution from other tests that import numpy.
   - Run the **entire** suite: all pre-existing tests plus the new Task 1-5 tests must pass.
 - **Manual / integration checks**:
   - `uv run pip install -e .[vectors]` (or `uv sync --extra vectors`) succeeds locally.

@@ -26,6 +26,8 @@ here; the core never imports numpy.
   pagination / `consumed_capacity` only (X1), finite+dimension pre-flight validation (E2),
   `expression_names` + aliased projections (X2), `top_k` bounds (E4).
 - **Testing & risk strategy items**: Spec Task 3 tests; Critique E1, E2, E3, E4, X1, X2 (pass-2).
+  Pass-2-tasks critique `docs/critiques/vector-search-tasks.md`: X1 (optional `hash_conditions`
+  + guarded iteration, 🎯), E4 (omit empty expression maps, 💡).
 - **Out of scope**: Template rendering (Task 4), decorator validation (Task 1), EasySAM (Task 5).
 
 ## Implementation Guidance
@@ -44,15 +46,20 @@ here; the core never imports numpy.
       `len(values) == dimensions` else `ValueError`; return `[{"N": str(x)} for x in values]`
       (plain list of `{"N": ...}`, **not** `L`-wrapped). (E2)
     - `_search_vectors(dynamo, table, index, *, vector, top_k, dimensions=None,
-      hash_conditions, filter_conditions, condition_expression=None, expression_values=None,
-      expression_names=None, projection=None, return_consumed_capacity=None)`:
+      hash_conditions=None, filter_conditions=None, condition_expression=None,
+      expression_values=None, expression_names=None, projection=None,
+      return_consumed_capacity=None)` — `hash_conditions`/`filter_conditions` **default to
+      `None`** (a hashless index passes no HASH), and every iteration over them must guard
+      `(hash_conditions or {})` / `(filter_conditions or {})` so a `None` never raises
+      (Critique X1, pass-2-tasks):
       1. Validate `1 <= top_k <= 100` → `ValueError` (E4).
       2. `search_vector = _format_vector(vector, dimensions=dimensions)` (E2/E1-pass2).
       3. Instantiate `TypeSerializer` and `TypeDeserializer` from `boto3.dynamodb.types`.
-      4. Build equality conjunctions from `hash_conditions` then `filter_conditions` (dicts
-         `{attr: value}`): for the i-th equality, use namespaced names `#pv_k_{i}` / `:pv_v_{i}`
-         producing `#pv_k_{i} = :pv_v_{i}`; record `names['#pv_k_{i}'] = attr` and
-         `values[':pv_v_{i}'] = serializer.serialize(value)` (E1, E3). Join with ` AND `.
+      4. Build equality conjunctions from `(hash_conditions or {})` then
+         `(filter_conditions or {})` (dicts `{attr: value}`): for the i-th equality, use
+         namespaced names `#pv_k_{i}` / `:pv_v_{i}` producing `#pv_k_{i} = :pv_v_{i}`; record
+         `names['#pv_k_{i}'] = attr` and `values[':pv_v_{i}'] = serializer.serialize(value)`
+         (E1, E3). Join with ` AND `.
       5. If `condition_expression` is provided, append it (wrap the auto part in parens and
          `AND` them, or append per spec); merge caller `expression_names` into `names` and
          serialize each `expression_values` entry via `TypeSerializer` into `values`
@@ -63,7 +70,12 @@ here; the core never imports numpy.
       7. Assemble request: `TableName=table`, `IndexName=index`, `SearchVector=search_vector`,
          `TopK=top_k`, and conditionally `SearchConditionExpression`,
          `ExpressionAttributeNames`, `ExpressionAttributeValues`, `ProjectionExpression`,
-         `ReturnConsumedCapacity` (only when supplied). **Never** pass `NextToken` (X1).
+         `ReturnConsumedCapacity`. **Only include `ExpressionAttributeNames` /
+         `ExpressionAttributeValues` when their dict is non-empty** (`if names: request[...] =
+         names`; `if values: request[...] = values`) — DynamoDB rejects empty expression maps
+         with `ValidationException`, which happens e.g. when projecting with no conditions
+         (Critique E4, pass-2-tasks). Likewise include `SearchConditionExpression` only when a
+         condition string was actually built. **Never** pass `NextToken` (X1).
       8. `client = dynamo.get_client()`. Lazy capability check: if
          `not hasattr(client, 'search_vectors')`, raise a clear `RuntimeError` telling the user
          to upgrade boto3 (`>= 1.43.89`).
@@ -100,6 +112,13 @@ here; the core never imports numpy.
     supplied `expression_names`/`expression_values` without collision, aliases `projection`
     attributes to `#pv_proj_*` (X2), and contains **no** `NextToken` key (X1).
   - Capability check: a fake client lacking `search_vectors` raises `RuntimeError`.
+  - **Hashless + no-filter call**: `_search_vectors(..., hash_conditions=None,
+    filter_conditions=None, projection=['Title'])` does not raise, builds **no**
+    `SearchConditionExpression`, omits `ExpressionAttributeValues` entirely (empty `values`),
+    and still sends the `#pv_proj_*`-aliased `ProjectionExpression` with a non-empty
+    `ExpressionAttributeNames` (Critique X1, E4).
+  - **Empty-maps guard**: assert a request with neither conditions nor projection carries
+    neither `ExpressionAttributeNames` nor `ExpressionAttributeValues` keys (Critique E4).
   - Import guard: `import prismarine.runtime.dynamo_vectors` then assert
     `'numpy' not in sys.modules` (when numpy not already imported by the test env; use a
     subprocess `python -c` check if the env pre-imports numpy).
