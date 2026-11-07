@@ -95,6 +95,16 @@ def test_format_vector_dimension_match():
     assert _format_vector([0.1, 0.2], dimensions=2) == [{'N': '0.1'}, {'N': '0.2'}]
 
 
+def test_format_vector_avoids_scientific_notation():
+    # Small floats render in exponent form via str()/repr() (e.g. "1.2e-05"),
+    # which DynamoDB SearchVectors rejects. _format_vector must emit plain
+    # decimal strings while preserving the value.
+    out = _format_vector([1.2e-05, 3.4e-07, 5e-09, 0.0, -0.98765432])
+    rendered = [d['N'] for d in out]
+    assert all('e' not in n and 'E' not in n for n in rendered), rendered
+    assert rendered == ['0.000012', '0.00000034', '0.000000005', '0.0', '-0.98765432']
+
+
 # --- top_k bounds -----------------------------------------------------------
 
 

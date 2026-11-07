@@ -1,5 +1,6 @@
 import math
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Generic, TypeVar
 
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -60,7 +61,11 @@ def _format_vector(vector: Any, dimensions: int | None = None) -> list[dict[str,
     if dimensions is not None and len(values) != dimensions:
         raise ValueError(f'Vector has {len(values)} dimensions, expected {dimensions}')
 
-    return [{'N': str(x)} for x in values]
+    # Emit a plain (non-scientific) decimal string per value. Python's str()/repr()
+    # renders small floats in exponent form (e.g. "1.2e-05"), which DynamoDB's
+    # SearchVectors rejects ("must be a 32-bit floating-point number"). Decimal(repr(x))
+    # round-trips the float exactly, and format(..., 'f') expands any exponent.
+    return [{'N': format(Decimal(repr(float(x))), 'f')} for x in values]
 
 
 def _search_vectors(
