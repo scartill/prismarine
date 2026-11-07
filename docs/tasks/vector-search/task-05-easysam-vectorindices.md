@@ -3,13 +3,13 @@ generated-by: "Split Tasks"
 source: docs/specs/vector-search.md
 generated-at: 2026-11-07T18:00:00+02:00
 inputs-ready: false
-completed: false
-status: not-started
+completed: true
+status: done
 ---
 
 # Task 05: Emit the `vectorindices` EasySAM block
 
-- [ ] **Completion**
+- [x] **Completion**
 - **Source spec**: `docs/specs/vector-search.md`
 - **Depends on**: `task-01-vector-index-decorator.md`
 - **Blocks**: `None`

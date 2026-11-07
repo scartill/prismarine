@@ -3,13 +3,13 @@ generated-by: "Split Tasks"
 source: docs/specs/vector-search.md
 generated-at: 2026-11-07T18:00:00+02:00
 inputs-ready: false
-completed: false
-status: not-started
+completed: true
+status: done
 ---
 
 # Task 02: Add `get_client()` to `DynamoAccess` + default implementation
 
-- [ ] **Completion**
+- [x] **Completion**
 - **Source spec**: `docs/specs/vector-search.md`
 - **Depends on**: `None`
 - **Blocks**: `task-03-dynamo-vectors.md`

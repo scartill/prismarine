@@ -301,6 +301,95 @@ class TeamModel(Model):
             ...
 ```
 
+### `vector_index` Decorator
+
+> Requires `pip install prismarine[vectors]` and DynamoDB native vector search
+> (`SearchVectors`, GA Aug 2026). Prismarine stores and searches vectors; it does **not**
+> generate embeddings — produce them yourself (Bedrock Titan, Cohere, etc.) and pass them in.
+
+Like `index`, `vector_index` decorators must be used *before* the `model` decorator. They
+declare a DynamoDB vector index and generate a type-safe `search()` method. It accepts
+`index`, `attribute`, `dimensions`, `distance` (`COSINE` | `EUCLIDEAN` | `DOT_PRODUCT`), an
+optional `hash` (SearchSchema HASH partition key), and optional `filters` (INLINE_FILTER
+attributes).
+
+```python
+@c.vector_index(
+    index='by-embedding',
+    attribute='Embedding',
+    dimensions=1536,
+    distance='COSINE',
+    hash='Category',
+    filters=['Brand'],
+)
+@c.model(PK='ProductId')
+class Product(TypedDict):
+    ProductId: str
+    Category: str
+    Brand: str
+    # Optional: SearchVectors omits the embedding from results unless you project it,
+    # so declare the vector field optional to keep pydantic hydration happy.
+    Embedding: list[float] | None
+```
+
+This adds a `ByEmbedding` subclass with a `search()` method:
+
+```python
+class ProductModel(Model):
+    ...
+
+    class ByEmbedding:
+        @staticmethod
+        def search(
+            *,
+            vector,                       # numpy array or any sequence
+            category: str,                # HASH — required (type taken from the model)
+            top_k: int = 10,              # 1..100 (DynamoDB caps TopK at 100)
+            brand: str | None = None,     # inline filter — optional
+            condition_expression: str | None = None,   # escape hatch
+            expression_values: dict | None = None,
+            expression_names: dict | None = None,       # alias reserved keywords
+            projection: list[str] | None = None,
+            return_consumed_capacity: str | None = None,
+        ) -> SearchResults[Product]:
+            ...
+```
+
+Usage and result shape:
+
+```python
+results = ProductModel.ByEmbedding.search(vector=my_embedding, category='Shoes', top_k=5)
+for hit in results:          # SearchResults is iterable / indexable / sized
+    print(hit.item, hit.score)
+print(results.consumed_capacity)
+```
+
+- `search()` returns a `SearchResults[T]` collection of `VectorSearchResult(item, score)`
+  hits, plus `consumed_capacity`. It implements `__iter__`, `__len__`, and `__getitem__`.
+- The raw `Score` is returned as-is — it is **not** re-sorted or inverted. Interpret it per the
+  distance function: for `COSINE`/`EUCLIDEAN` a **lower** score is closer; for `DOT_PRODUCT` a
+  **higher** score is closer.
+- **No pagination.** DynamoDB vector search has no cursor; request up to `top_k = 100` results.
+- For range/comparison filters beyond the inline-equality kwargs, use the
+  `condition_expression` / `expression_values` / `expression_names` escape hatch (standard
+  DynamoDB parameterized expression syntax).
+
+**Vectors (numpy, optional).** Vector values are passed as a `numpy.ndarray` (or any sequence);
+install the extra with `pip install prismarine[vectors]`. The core library stays numpy-free — a
+plain install and any non-vector generated client never import numpy.
+
+**Backfill caveat.** `SearchVectors` raises `ValidationException` while an index is backfilling
+and briefly after it becomes `ACTIVE`. This is outside Prismarine's scope — callers must retry.
+
+**Custom access layers.** `SearchVectors` is a low-level client call. Prismarine adds
+`get_client()` to `DynamoAccess` with a default deriving from `get_resource().meta.client`, so
+existing custom-access classes inherit it unchanged. Override it only if your access layer needs
+a differently-configured client.
+
+**Constraints.** The table must be on-demand (`PAY_PER_REQUEST`); at most 5 vector indexes per
+table; `1 <= dimensions <= 4096`. Emitting the `vectorindices` infrastructure block requires a
+compatible EasySAM (CloudFormation `VectorIndexes` support is a coordinated, separate change).
+
 ### `export` Decorator
 
 The `Cluster.export` decorator is used to define a class that is not a model, but is exported from the cluster. It accepts a class as an argument. It is required to used on all classes that serve as types for model elements.

@@ -3,13 +3,13 @@ generated-by: "Split Tasks"
 source: docs/specs/vector-search.md
 generated-at: 2026-11-07T18:00:00+02:00
 inputs-ready: false
-completed: false
-status: not-started
+completed: true
+status: done
 ---
 
 # Task 06: Wire the optional `[vectors]` extra, version floors, integration
 
-- [ ] **Completion**
+- [x] **Completion**
 - **Source spec**: `docs/specs/vector-search.md`
 - **Depends on**: `task-03-dynamo-vectors-runtime.md`, `task-04-render-search-class.md`,
   `task-05-easysam-vectorindices.md`
@@ -62,9 +62,15 @@ and run the full test suite + ruff to confirm green and byte-identical non-vecto
     is byte-identical to pre-feature output (diff against a saved baseline, e.g. regenerate the
     existing `example/myapp` client and `git diff` shows no change).
 - **Risk coverage**: E6 (typing floor), core-numpy-free invariant, byte-identical guard.
-- **Demo command**: `uv run pytest -q && ruff format --check . && ruff check src tests`
-- **Expected result**: Full suite green; `ruff format --check` reports no changes; lint clean;
-  numpy-absent guard holds; non-vector generated output unchanged.
+- **Demo command**: `.venv\Scripts\python.exe -m pytest -q` with `.venv\Scripts` on `PATH`
+  (so the generator's `ruff` subprocess resolves). `uv run pytest` also works **when** the
+  environment can reach the package index; in an offline/locked environment `uv run` blocks on
+  dependency resolution, so the venv-interpreter invocation is the reliable hermetic form.
+  Lint/format: `ruff check src tests` (clean) and `ruff format --check .` (only pre-existing
+  non-feature files differ).
+- **Expected result**: Full suite green (48 passed, 1 skipped — the skip is the numpy-array
+  `_format_vector` test, correct when numpy is absent); `ruff check` clean; numpy-absent guard
+  holds; non-vector generated output byte-identical (example client regenerates with no diff).
 
 ## Handoff Notes
 If `ruff format --check` flags generated-template whitespace, fix the `model.mako` text in

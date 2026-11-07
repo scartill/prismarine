@@ -3,13 +3,13 @@ generated-by: "Split Tasks"
 source: docs/specs/vector-search.md
 generated-at: 2026-11-07T18:00:00+02:00
 inputs-ready: false
-completed: false
-status: not-started
+completed: true
+status: done
 ---
 
 # Task 03: Create `runtime/dynamo_vectors.py` (result types + `_search_vectors`)
 
-- [ ] **Completion**
+- [x] **Completion**
 - **Source spec**: `docs/specs/vector-search.md`
 - **Depends on**: `task-02-get-client.md`
 - **Blocks**: `task-04-render-search-class.md`

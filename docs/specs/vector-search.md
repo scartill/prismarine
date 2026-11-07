@@ -2,7 +2,7 @@
 generated-by: "Plan Spec"
 source: docs/seed/vector-search.md
 generated-at: 2026-10-31T10:40:00+02:00
-status: split
+status: implemented
 critiqued-revision: 0f625db
 ---
 
