@@ -5,6 +5,10 @@
 **Date**: 2026-09-21  
 **Verdict**: ⚠️ **PROCEED WITH UPDATES**
 
+> **Status (applied 2026-10-31):** All remediations below have been folded into
+> `docs/specs/vector-search.md` — E1, P1, X1, E2, E3, and P2. The spec is now cleared for
+> implementation. The sections below are retained as the review record.
+
 ---
 
 ## Executive Summary

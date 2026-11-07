@@ -1,7 +1,11 @@
 # Spec: DynamoDB Native Vector Search Support
 
 _Derived from `docs/seed/vector-search.md`. Design decisions confirmed with the user
-(numbered Q&A: 1-b, 2-a, 3-a, 4-a, 5-c, 6-a)._
+(numbered Q&A: 1-b, 2-a, 3-a, 4-a, 5-c, 6-a). Critique remediations from
+`docs/critiques/vector-search.md` applied: E1 (TypeSerializer for low-level values),
+P1 (reserved-keyword validation), X1 (next_token + consumed_capacity), E2 (pre-flight
+finite/dimension validation), E3 (namespaced condition placeholders), P2 (schema-derived
+filter type hints)._
 
 ## Problem Statement
 
@@ -24,15 +28,30 @@ generate byte-identical output to today.
   on inline filters. (Decision 1-b)
 - Results are deserialized via `boto3.dynamodb.types.TypeDeserializer` then run through the
   existing `prepare_item` (strip Decimals) to match CRUD output shape. (Decision 2-a)
-- `search()` returns a generic `SearchResults[T]` holding `item: T` and `score: float`.
-  In pydantic mode `item` is loaded via `_load_model`; in typed-dict mode it is the plain
-  dict. The embedding attribute is **not** stripped from results. (Decision 3-a)
+- Because `search_vectors` is a **low-level client** call, all filter values and any
+  escape-hatch `expression_values` must be wrapped into low-level `AttributeValue` maps
+  (`{"S": ...}`, `{"N": ...}`) via `boto3.dynamodb.types.TypeSerializer`. Passing raw
+  Python types triggers a boto3 `ParamValidationError`. (Critique E1)
+- Auto-generated condition placeholders must be namespaced (e.g. `#pv_k_0` / `:pv_v_0`) so
+  they cannot collide with user-supplied escape-hatch `expression_values`. (Critique E3)
+- `search()` returns a generic `SearchResults[T]` holding `item: T` and `score: float`,
+  plus `next_token: str | None` and `consumed_capacity: dict[str, Any] | None` for
+  pagination and cost observability. In pydantic mode `item` is loaded via `_load_model`;
+  in typed-dict mode it is the plain dict. The embedding attribute is **not** stripped from
+  results. (Decision 3-a; Critique X1)
+- `search()` accepts `next_token: str | None = None` and
+  `return_consumed_capacity: str | None = None` kwargs, threaded through to the
+  `SearchVectors` call (`NextToken`, `ReturnConsumedCapacity`) and surfaced back on the
+  result. (Critique X1)
 - Return the raw `Score` — do not re-sort or invert; score meaning depends on the distance
   function (COSINE/EUCLIDEAN: lower = closer; DOT_PRODUCT: higher = closer). Document it.
 - Vector values are `numpy.ndarray`, gated behind `pip install prismarine[vectors]`. The
   vector helper duck-types the input (`.tolist()` when available, else `list(...)`) and
-  formats it to the plain `[{"N": ...}]` shape (not `L`-wrapped). numpy import stays lazy
-  and confined to `runtime/dynamo_vectors.py`; the core never imports numpy.
+  formats it to the plain `[{"N": ...}]` shape (not `L`-wrapped). It performs pre-flight
+  validation: assert every value is finite (`math.isfinite`, rejecting `NaN`/`Inf`) and,
+  when `dimensions` is known, assert `len(vector) == dimensions` — failing fast locally
+  rather than after a network round-trip. numpy import stays lazy and confined to
+  `runtime/dynamo_vectors.py`; the core never imports numpy. (Critique E2)
 - Add `get_client()` to the `DynamoAccess` base with a concrete default deriving from
   `self.get_resource().meta.client`, so existing custom-access classes inherit it
   unchanged. Document this for custom-access users. (Decision 4-a)
@@ -75,8 +94,9 @@ generate byte-identical output to today.
   supports `=` only; inline filters support comparison/range. The helper builds `#k = :k`
   conjunctions from equality kwargs and appends any escape-hatch expression.
 - Response: `{'SearchResults': [{'Item': <AttributeValue map>, 'Score': float}],
-  'ConsumedCapacity': {...}}`. `Item` is low-level AttributeValue format → needs
-  `TypeDeserializer` + `prepare_item`.
+  'NextToken': <str>, 'ConsumedCapacity': {...}}`. `Item` is low-level AttributeValue
+  format → needs `TypeDeserializer` + `prepare_item`. `NextToken` and `ConsumedCapacity`
+  are surfaced on `SearchResults`.
 - Score semantics: COSINE/EUCLIDEAN → k smallest (lower=closer); DOT_PRODUCT → k highest
   (higher=closer). Documented, not transformed.
 
@@ -141,11 +161,13 @@ class ProductModel(Model):
             *,
             vector,
             top_k: int = 10,
-            category: str,                # HASH — required
-            brand: str | None = None,     # inline filter — optional
+            category: str,                # HASH — required, type from model schema
+            brand: str | None = None,     # inline filter — optional, type from model schema
             condition_expression: str | None = None,  # escape hatch
             expression_values: dict | None = None,
             projection: list[str] | None = None,
+            next_token: str | None = None,
+            return_consumed_capacity: str | None = None,
         ) -> SearchResults[Product]:
             ...
 ```
@@ -156,9 +178,14 @@ class ProductModel(Model):
 - **Objective**: Extend `runtime/cluster.py` with a `VectorIndexConfig` TypedDict and a
   `vector_index(*, index, attribute, dimensions, distance, hash=None, filters=None)` method
   mirroring `index()`. Initialize `'vector_indexes': {}` in `model()`. Validate `distance`
-  ∈ {COSINE, EUCLIDEAN, DOT_PRODUCT} and `dimensions` ≤ 4096.
+  ∈ {COSINE, EUCLIDEAN, DOT_PRODUCT} and `dimensions` ≤ 4096. Validate that `hash` and
+  every attribute in `filters` avoid reserved generated-`search()` parameter names —
+  `{'vector', 'top_k', 'condition_expression', 'expression_values', 'projection',
+  'next_token', 'return_consumed_capacity'}` — raising `ValueError` on collision so the
+  generated staticmethod signature can never break. (Critique P1)
 - **Tests**: Unit test that decorating a model registers vector-index metadata with correct
-  fields; invalid `distance`/`dimensions` raise.
+  fields; invalid `distance`/`dimensions` raise; a `hash` or `filters` entry matching a
+  reserved name raises `ValueError`.
 - **Demo**: Import a models module with `@c.vector_index`; show `model['vector_indexes']`
   populated.
 
@@ -173,36 +200,59 @@ class ProductModel(Model):
 
 ### Task 3: Create `runtime/dynamo_vectors.py` (`SearchResults`, `_search_vectors`)
 - **Objective**: New module with a generic `SearchResults`/`VectorSearchResult` type
-  (`item: T`, `score: float`); `_format_vector(vector)` that duck-types (`.tolist()` if
-  present else `list(...)`) → `[{"N": str(x)}]`; and `_search_vectors(dynamo, table, index,
-  *, vector, top_k, hash_conditions, filter_conditions, condition_expression=None,
-  expression_values=None, projection=None)` that builds `SearchConditionExpression` from
-  equality conditions (`#k = :k` joined by `AND`), appends the escape-hatch expression,
-  assembles names/values, calls `get_client().search_vectors(...)`, deserializes each
-  result `Item` via `TypeDeserializer` + `prepare_item`, returns `SearchResults`. Lazy
-  capability check raising a clear error if `search_vectors` is absent. numpy never imported
-  by this module (duck-typing).
-- **Tests**: `_format_vector` with numpy array (skipif absent) and plain list; a
-  `_search_vectors` test with a fake `DynamoAccess` whose client returns a canned payload,
-  asserting deserialization + score passthrough + condition-expression construction. A
-  numpy-absent import test asserting `'numpy' not in sys.modules` after importing core.
+  (`item: T`, `score: float`, `next_token: str | None = None`,
+  `consumed_capacity: dict[str, Any] | None = None`); `_format_vector(vector, dimensions=None)`
+  that duck-types (`.tolist()` if present else `list(...)`) → `[{"N": str(x)}]` with
+  pre-flight validation — assert every value is finite via `math.isfinite` (reject
+  `NaN`/`Inf`) and, when `dimensions` is provided, assert `len(vector) == dimensions`,
+  raising a clear `ValueError` before any network call (Critique E2); and
+  `_search_vectors(dynamo, table, index, *, vector, top_k, hash_conditions,
+  filter_conditions, condition_expression=None, expression_values=None, projection=None,
+  next_token=None, return_consumed_capacity=None)` that builds `SearchConditionExpression`
+  from equality conditions using **namespaced placeholders** (`#pv_k_0 = :pv_v_0`, …,
+  joined by `AND`) so they cannot collide with the escape-hatch expression (Critique E3),
+  appends the escape-hatch expression, wraps every equality value and each
+  `expression_values` entry into low-level `AttributeValue` maps via
+  `boto3.dynamodb.types.TypeSerializer` (Critique E1), assembles
+  `ExpressionAttributeNames`/`ExpressionAttributeValues`, threads `NextToken` and
+  `ReturnConsumedCapacity` when supplied, calls `get_client().search_vectors(...)`,
+  deserializes each result `Item` via `TypeDeserializer` + `prepare_item`, and returns a
+  `SearchResults` carrying the items, the response `NextToken`, and `ConsumedCapacity`
+  (Critique X1). Lazy capability check raising a clear error if `search_vectors` is absent.
+  numpy never imported by this module (duck-typing).
+- **Tests**: `_format_vector` with numpy array (skipif absent) and plain list; pre-flight
+  validation rejects `NaN`/`Inf` and a length mismatch against `dimensions` (Critique E2);
+  a `_search_vectors` test with a fake `DynamoAccess` whose client returns a canned payload
+  (including `NextToken` + `ConsumedCapacity`), asserting deserialization, score
+  passthrough, `next_token`/`consumed_capacity` surfaced on the result (Critique X1),
+  `TypeSerializer`-wrapped filter values (`{"S": ...}`/`{"N": ...}`) (Critique E1), and
+  namespaced condition-expression construction that does not clash with a supplied
+  escape-hatch `expression_values` (Critique E3). A numpy-absent import test asserting
+  `'numpy' not in sys.modules` after importing core.
 - **Demo**: Call `_search_vectors` against the fake access; print `SearchResults`.
 
 ### Task 4: Extend `model.mako` + `prisma_client.py` to render the vector search class
 - **Objective**: Pass a sorted `VectorIndexes` list into the template render in
-  `build_client` (`name`, `attribute`, `distance`, `hash`, `filters`). In `model.mako`,
-  after the GSI loop, render one nested class per vector index (PascalCase name) with a
-  `search(*, vector, top_k=10, <hash kwarg if hash>, <optional filter kwargs>,
-  condition_expression=None, expression_values=None, projection=None) -> SearchResults[Model]`
-  that calls the imported `_search_vectors`, passing `hash_conditions`/`filter_conditions`
-  keyed by real attribute names. Pydantic mode wraps items via `_load_model`. Add
-  `_search_vectors`, `SearchResults` (and typing) to the header imports **only when at least
-  one model has a vector index**, preserving byte-identical non-vector output.
+  `build_client` (`name`, `attribute`, `distance`, `hash`, `filters`), including the model
+  field type for the `hash` and each `filters` attribute resolved from the model schema so
+  the template can annotate kwargs with real types instead of hardcoding `str` (Critique
+  P2). In `model.mako`, after the GSI loop, render one nested class per vector index
+  (PascalCase name) with a `search(*, vector, top_k=10, <hash kwarg if hash>, <optional
+  filter kwargs>, condition_expression=None, expression_values=None, projection=None,
+  next_token=None, return_consumed_capacity=None) -> SearchResults[Model]` where the HASH
+  and filter kwargs carry their schema-derived type annotations (Critique P2), that calls
+  the imported `_search_vectors`, passing `hash_conditions`/`filter_conditions` keyed by
+  real attribute names plus `next_token`/`return_consumed_capacity` (Critique X1). Pydantic
+  mode wraps items via `_load_model`. Add `_search_vectors`, `SearchResults` (and typing)
+  to the header imports **only when at least one model has a vector index**, preserving
+  byte-identical non-vector output.
 - **Tests**: Extend `tests/test_prisma_client_generation.py` — assert emitted
-  `class ByEmbedding:` + `def search(` with required HASH kwarg, optional filter kwargs,
-  escape-hatch params, `SearchResults[Product]` return, conditional `_search_vectors`
-  import; assert a no-vector model emits no vector imports (byte-identical guard). Cover
-  both model libraries.
+  `class ByEmbedding:` + `def search(` with required HASH kwarg, optional filter kwargs
+  carrying schema-derived type hints (e.g. a non-`str` filter field annotated with its real
+  type) (Critique P2), escape-hatch params, `next_token`/`return_consumed_capacity` kwargs
+  (Critique X1), `SearchResults[Product]` return, conditional `_search_vectors` import;
+  assert a no-vector model emits no vector imports (byte-identical guard). Cover both model
+  libraries.
 - **Demo**: Generate a client for a vector-index model; show `ByEmbedding.search`.
 
 ### Task 5: Emit the `vectorindices` EasySAM block
